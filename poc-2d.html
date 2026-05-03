@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stroma — Galaxy POC 2D</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #050510;
+      color: #ccc;
+      font-family: monospace;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #sidebar {
+      width: 260px;
+      min-width: 260px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+      border-right: 1px solid #1a1a3a;
+      background: #07071a;
+    }
+    h1 { font-size: 13px; color: #7a9fff; letter-spacing: 1px; text-transform: uppercase; }
+    .section-title { font-size: 10px; color: #556; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .control { display: flex; flex-direction: column; gap: 4px; }
+    .control label { font-size: 11px; color: #aab; display: flex; justify-content: space-between; }
+    .control label span { color: #7af; }
+    input[type=range] { width: 100%; accent-color: #4466ff; }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .stat { font-size: 11px; color: #888; }
+    .stat b { color: #aac; }
+    button {
+      background: #1a2060;
+      color: #9ab;
+      border: 1px solid #2a3080;
+      padding: 6px 10px;
+      font-family: monospace;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 3px;
+    }
+    button:hover { background: #222880; }
+    #canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Galaxy POC 2D</h1>
+
+  <div>
+    <div class="section-title">Génération</div>
+    <div class="control">
+      <label>Seed<span id="v-seed">42</span></label>
+      <input type="range" id="seed" min="1" max="9999" value="42" step="1" />
+    </div>
+    <div class="control">
+      <label>Étoiles<span id="v-stars">8000</span></label>
+      <input type="range" id="stars" min="500" max="30000" value="8000" step="500" />
+    </div>
+  </div>
+
+  <div>
+    <div class="section-title">Spirale</div>
+    <div class="control">
+      <label>Bras<span id="v-arms">2</span></label>
+      <input type="range" id="arms" min="1" max="8" value="2" step="1" />
+    </div>
+    <div class="control">
+      <label>Rayon max<span id="v-radius">100</span></label>
+      <input type="range" id="radius" min="30" max="300" value="100" step="5" />
+    </div>
+    <div class="control">
+      <label>Serrage spirale<span id="v-tightness">0.35</span></label>
+      <input type="range" id="tightness" min="0.05" max="1.5" value="0.35" step="0.05" />
+    </div>
+    <div class="control">
+      <label>Dispersion bras<span id="v-spread">0.25</span></label>
+      <input type="range" id="spread" min="0.0" max="1.0" value="0.25" step="0.05" />
+    </div>
+  </div>
+
+  <div>
+    <div class="section-title">Bulbe</div>
+    <div class="control">
+      <label>Fraction bulbe<span id="v-bulge-frac">0.15</span></label>
+      <input type="range" id="bulge-frac" min="0.0" max="0.5" value="0.15" step="0.01" />
+    </div>
+    <div class="control">
+      <label>Rayon bulbe<span id="v-bulge-r">12</span></label>
+      <input type="range" id="bulge-r" min="2" max="50" value="12" step="1" />
+    </div>
+  </div>
+
+  <div>
+    <div class="section-title">Rendu</div>
+    <div class="control">
+      <label>Zoom<span id="v-zoom">1.0</span></label>
+      <input type="range" id="zoom" min="0.2" max="5.0" value="1.0" step="0.1" />
+    </div>
+    <div class="control">
+      <label>Opacité<span id="v-alpha">0.85</span></label>
+      <input type="range" id="alpha" min="0.1" max="1.0" value="0.85" step="0.05" />
+    </div>
+  </div>
+
+  <button id="btn-regen">Randomiser seed</button>
+
+  <div>
+    <div class="section-title">Classes spectrales</div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div id="stats" class="stat"></div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="galaxy"></canvas>
+</div>
+
+<script>
+// ============================================================
+// Algorithme de génération (port direct de generator.ts)
+// ============================================================
+
+const SPECTRAL_COLORS = {
+  O: [0.6,  0.7,  1.0 ],
+  B: [0.7,  0.82, 1.0 ],
+  F: [0.98, 0.97, 0.88],
+  G: [1.0,  0.95, 0.6 ],
+  K: [1.0,  0.72, 0.35],
+  M: [1.0,  0.4,  0.2 ],
+};
+
+const SPECTRAL_DISTRIBUTION = [
+  { cls: "M", weight: 0.76 },
+  { cls: "K", weight: 0.12 },
+  { cls: "G", weight: 0.07 },
+  { cls: "F", weight: 0.03 },
+  { cls: "B", weight: 0.015 },
+  { cls: "O", weight: 0.005 },
+];
+
+const SPECTRAL_SIZE = { O: 4.0, B: 2.5, F: 1.3, G: 1.0, K: 0.8, M: 0.5 };
+
+function makeLcg(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+function boxMuller(rng) {
+  const u = 1 - rng();
+  const v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function sampleSpectralClass(rng) {
+  const total = SPECTRAL_DISTRIBUTION.reduce((s, d) => s + d.weight, 0);
+  let r = rng() * total;
+  for (const { cls, weight } of SPECTRAL_DISTRIBUTION) {
+    r -= weight;
+    if (r <= 0) return cls;
+  }
+  return "M";
+}
+
+function generateGalaxy(params) {
+  const rng = makeLcg(params.seed);
+  const stars = [];
+
+  const bulgeCount = Math.floor(params.starCount * params.bulgeFraction);
+  const diskCount = params.starCount - bulgeCount;
+
+  // Bulbe central
+  for (let i = 0; i < bulgeCount; i++) {
+    const r = Math.abs(boxMuller(rng)) * params.bulgeRadius * 0.5;
+    const theta = rng() * 2 * Math.PI;
+    const phi = (rng() - 0.5) * Math.PI;
+
+    const x = r * Math.cos(theta) * Math.cos(phi);
+    const z = r * Math.sin(theta) * Math.cos(phi);
+
+    const spectralClass = sampleSpectralClass(rng);
+    stars.push({ x, z, spectralClass, size: SPECTRAL_SIZE[spectralClass] });
+  }
+
+  // Disque spiral
+  for (let i = 0; i < diskCount; i++) {
+    const arm = Math.floor(rng() * params.armCount);
+    const armOffset = (arm / params.armCount) * 2 * Math.PI;
+
+    const t = Math.pow(rng(), 0.7);
+    const r = params.bulgeRadius * 0.8 + t * (params.radiusMax - params.bulgeRadius * 0.8);
+
+    const spiralAngle = params.spiralTightness * Math.log(r / (params.bulgeRadius * 0.5 + 1));
+    const baseAngle = armOffset + spiralAngle;
+
+    const scatter = boxMuller(rng) * params.armSpread * params.radiusMax * 0.08;
+    const scatterAngle = scatter / Math.max(r, 1);
+
+    const angle = baseAngle + scatterAngle;
+    const radialScatter = boxMuller(rng) * params.armSpread * 3;
+
+    const x = (r + radialScatter) * Math.cos(angle);
+    const z = (r + radialScatter) * Math.sin(angle);
+
+    const spectralClass = sampleSpectralClass(rng);
+    stars.push({ x, z, spectralClass, size: SPECTRAL_SIZE[spectralClass] });
+  }
+
+  return stars;
+}
+
+// ============================================================
+// Rendu canvas 2D (vue top-down : x / z)
+// ============================================================
+
+const canvas = document.getElementById("galaxy");
+const ctx = canvas.getContext("2d");
+
+function resizeCanvas() {
+  const wrap = document.getElementById("canvas-wrap");
+  const size = Math.min(wrap.clientWidth, wrap.clientHeight);
+  canvas.width = size;
+  canvas.height = size;
+}
+
+function getParams() {
+  return {
+    seed:            +document.getElementById("seed").value,
+    starCount:       +document.getElementById("stars").value,
+    armCount:        +document.getElementById("arms").value,
+    radiusMax:       +document.getElementById("radius").value,
+    diskThickness:   4,
+    armSpread:       +document.getElementById("spread").value,
+    spiralTightness: +document.getElementById("tightness").value,
+    bulgeFraction:   +document.getElementById("bulge-frac").value,
+    bulgeRadius:     +document.getElementById("bulge-r").value,
+  };
+}
+
+function toHex255(v) {
+  return Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0");
+}
+
+function spectralHex(cls, alpha) {
+  const [r, g, b] = SPECTRAL_COLORS[cls];
+  const a = Math.round(alpha * 255).toString(16).padStart(2, "0");
+  return `#${toHex255(r)}${toHex255(g)}${toHex255(b)}${a}`;
+}
+
+let stars = [];
+
+function render() {
+  const W = canvas.width;
+  const H = canvas.height;
+  const zoom = +document.getElementById("zoom").value;
+  const alpha = +document.getElementById("alpha").value;
+  const radiusMax = +document.getElementById("radius").value;
+
+  // Fond
+  ctx.fillStyle = "#050510";
+  ctx.fillRect(0, 0, W, H);
+
+  const scale = (W / 2) / radiusMax * zoom;
+  const cx = W / 2;
+  const cy = H / 2;
+
+  // Glow central doux
+  const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(W, H) * 0.12);
+  grd.addColorStop(0, "rgba(160,140,255,0.18)");
+  grd.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  for (const star of stars) {
+    const px = cx + star.x * scale;
+    const py = cy + star.z * scale;
+
+    if (px < -4 || px > W + 4 || py < -4 || py > H + 4) continue;
+
+    const r = Math.max(0.4, star.size * 0.55 * Math.sqrt(zoom));
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = spectralHex(star.spectralClass, alpha);
+    ctx.fill();
+  }
+
+  // Stats
+  const counts = {};
+  for (const s of stars) counts[s.spectralClass] = (counts[s.spectralClass] || 0) + 1;
+  document.getElementById("stats").innerHTML =
+    `<b>${stars.length.toLocaleString()}</b> étoiles<br>` +
+    Object.entries(counts)
+      .sort(([a], [b]) => "OBAFGKM".indexOf(a) - "OBAFGKM".indexOf(b))
+      .map(([cls, n]) => `${cls}: ${n}`)
+      .join(" · ");
+}
+
+function regenerate() {
+  const t0 = performance.now();
+  stars = generateGalaxy(getParams());
+  const dt = (performance.now() - t0).toFixed(1);
+  render();
+  document.getElementById("stats").innerHTML += `<br><span style="color:#444">génération: ${dt} ms</span>`;
+}
+
+// ============================================================
+// Légende
+// ============================================================
+function buildLegend() {
+  const legend = document.getElementById("legend");
+  legend.innerHTML = "";
+  const classes = ["O", "B", "F", "G", "K", "M"];
+  const labels = { O: "O — bleu", B: "B — bleu-blanc", F: "F — blanc", G: "G — jaune", K: "K — orange", M: "M — rouge" };
+  for (const cls of classes) {
+    const [r, g, b] = SPECTRAL_COLORS[cls];
+    const hex = `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+    legend.innerHTML += `<div class="legend-item">
+      <div class="legend-dot" style="background:${hex}"></div>
+      <span>${labels[cls]}</span>
+    </div>`;
+  }
+}
+
+// ============================================================
+// Sliders — mise à jour live
+// ============================================================
+const VALUE_IDS = {
+  seed: "v-seed",
+  stars: "v-stars",
+  arms: "v-arms",
+  radius: "v-radius",
+  tightness: "v-tightness",
+  spread: "v-spread",
+  "bulge-frac": "v-bulge-frac",
+  "bulge-r": "v-bulge-r",
+  zoom: "v-zoom",
+  alpha: "v-alpha",
+};
+
+// Sliders qui nécessitent une regénération
+const REGEN_SLIDERS = new Set(["seed","stars","arms","radius","tightness","spread","bulge-frac","bulge-r"]);
+
+for (const [id, vid] of Object.entries(VALUE_IDS)) {
+  const el = document.getElementById(id);
+  el.addEventListener("input", () => {
+    document.getElementById(vid).textContent = parseFloat(el.value).toFixed(
+      ["tightness","spread","bulge-frac","alpha","zoom"].includes(id) ? 2 : 0
+    );
+    if (REGEN_SLIDERS.has(id)) {
+      regenerate();
+    } else {
+      render();
+    }
+  });
+}
+
+document.getElementById("btn-regen").addEventListener("click", () => {
+  const newSeed = Math.floor(Math.random() * 9999) + 1;
+  const el = document.getElementById("seed");
+  el.value = newSeed;
+  document.getElementById("v-seed").textContent = newSeed;
+  regenerate();
+});
+
+window.addEventListener("resize", () => {
+  resizeCanvas();
+  render();
+});
+
+// ============================================================
+// Init
+// ============================================================
+resizeCanvas();
+buildLegend();
+regenerate();
+</script>
+</body>
+</html>
